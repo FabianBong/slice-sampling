@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Normal Distribution Plot with D3.js</title>
+		<script src="https://d3js.org/d3.v6.min.js"></script>
+		<style>
+			.line {
+				fill: none;
+				stroke: steelblue;
+				stroke-width: 5;
+			}
+			.hline {
+				stroke: green;
+				stroke-width: 1;
+				stroke-dasharray: 5, 5;
+			}
+			.point {
+				fill: darkgray;
+				stroke: none;
+			}
+			.bar {
+				fill: lightgray;
+				stroke: none;
+			}
+			.possible_point {
+				fill: green;
+				stroke: none;
+			}
+			.explanation {
+				background-color: #fff;
+				padding: 20px;
+				border: 1px solid #ddd;
+				border-radius: 5px;
+				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+				margin-bottom: 20px;
+			}
+			.titlebox {
+				background-color: #fff;
+				border: 1px solid #ddd;
+				padding-left: 20px;
+				border-radius: 5px;
+				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+				margin-bottom: 20px;
+			}
+			.explanation h2 {
+				margin-top: 0;
+				color: #007bff;
+			}
+			.explanation p {
+				margin-bottom: 10px;
+			}
+		</style>
+	</head>
+	<body style="padding: 50px; font-family: Arial, sans-serif">
+		<div class="titlebox" style="padding-top: -10px">
+			<h1>Slice Sampling</h1>
+			<h2 style="margin-top: -20px; color: gray">An Interactive Visualization</h2>
+			<p style="color: gray; font-size: small">Made By Fabian Bong - 2024</p>
+		</div>
+		<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; gap: 20px">
+			<div id="chart" class="explanation" style="flex: 1"></div>
+			<div class="controls explanation" style="flex: 1; height: 520px; min-width: 150px; padding: 10px; font-family: Arial, sans-serif">
+				<div style="margin-bottom: 10px">
+					<label for="delay_range" style="display: block; margin-bottom: 5px">Delay (ms):</label>
+					<input type="range" id="delay_range" min="0" max="1000" style="width: 100%" />
+				</div>
+				<div style="margin-bottom: 10px">
+					<label for="width" style="display: block; margin-bottom: 5px">Width:</label>
+					<input type="range" id="width" min="0.1" max="1" step="0.1" style="width: 100%" />
+				</div>
+				<div style="margin-bottom: 10px">
+					<label for="distribution_type" style="display: block; margin-bottom: 5px">Distribution Type:</label>
+					<select id="distribution_type" style="width: 100%; padding: 5px">
+						<option value="0">Normal</option>
+						<option value="1">Mixture of Normals</option>
+						<option value="2">Uniform</option>
+					</select>
+				</div>
+
+				<button
+					onclick="restart()"
+					style="width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; cursor: pointer"
+				>
+					Restart
+				</button>
+				<div id="sample-counter" style="margin-top: 10px; font-weight: bold">Samples Generated: 0</div>
+				<div id="sample-mean" style="margin-top: 10px; font-weight: bold">Samples Generated: 0</div>
+				<div id="sample-sd" style="margin-top: 10px; font-weight: bold">Samples Generated: 0</div>
+			</div>
+		</div>
+		<div class="explanation">
+			<h2>What is Slice Sampling?</h2>
+			<p>Slice sampling is a Markov Chain Monte Carlo (MCMC) method used for sampling from probability distributions.</p>
+			<h2>How Does Slice Sampling Work?</h2>
+			<ol>
+				<li><strong>Initialization:</strong> Start with an initial value within the range of the distribution.</li>
+				<li><strong>Vertical Sampling:</strong> Sample uniformly from under the curve of the distribution.</li>
+				<li>
+					<strong>Horizontal Sampling:</strong> Sample horizontally within the slice defined by the vertical sample and the distribution
+					value.
+				</li>
+				<li><strong>Repeat:</strong> Iteratively repeat steps 2 and 3 to generate a chain of samples.</li>
+			</ol>
+			<h2>Benefits of Slice Sampling</h2>
+			<ul>
+				<li>Does not require tuning of a proposal distribution.</li>
+				<li>Can handle multimodal distributions.</li>
+				<li>Simple and effective for a wide range of distributions.</li>
+			</ul>
+			<h2>Example Use Cases</h2>
+			<p>
+				Slice sampling is particularly useful in Bayesian inference, where posterior distributions can be complex and difficult to sample from
+				using traditional methods.
+			</p>
+		</div>
+
+		<script>
+			const margin = { top: 20, right: 30, bottom: 30, left: 40 };
+			const width = 0.7 * window.innerWidth - margin.left - margin.right;
+			const height = 500 - margin.top - margin.bottom;
+			let x0 = 0; // Initial point
+			let delay_value = document.getElementById("delay_range").value; // Delay in ms
+			let distribution_type = document.getElementById("distribution_type").value;
+			let w = parseFloat(document.getElementById("width").value); // Width of the slice
+			let sampleCounter = document.getElementById("sample-counter");
+			let sampleMean = document.getElementById("sample-mean");
+			let sampleSD = document.getElementById("sample-sd");
+			let yAxisMax = 0.5;
+
+			function uniformPDF(x, min, max) {
+				if (x >= min && x <= max) {
+					return 1 / (max - min);
+				} else {
+					return 0;
+				}
+			}
+
+			function updateStats() {
+				sampleCounter.innerText = `Samples Generated: ${samples.length}`;
+				let sum = 0;
+				samples.forEach((sample) => {
+					sum += sample.x;
+				});
+				let mean = sum / samples.length;
+				sampleMean.innerText = `Sample Mean: ${mean.toFixed(2)}`;
+				let sd = 0;
+				samples.forEach((sample) => {
+					sd += Math.pow(sample.x - mean, 2);
+				});
+				sd = Math.sqrt(sd / samples.length);
+				sampleSD.innerText = `Sample SD: ${sd.toFixed(2)}`;
+			}
+
+			document.getElementById("delay_range").addEventListener("input", function () {
+				delay_value = this.value;
+			});
+
+			document.getElementById("distribution_type").addEventListener("change", function () {
+				distribution_type = this.value;
+				restart();
+			});
+
+			document.getElementById("width").addEventListener("input", function () {
+				// convert this.value to integer
+				int_w = parseFloat(this.value);
+				w = int_w;
+			});
+
+			const x = d3.scaleLinear().domain([-5, 5]).range([0, width]);
+			const y = d3.scaleLinear().domain([0, yAxisMax]).range([height, 0]);
+
+			const line = d3
+				.line()
+				.x((d) => x(d.x))
+				.y((d) => y(d.y));
+
+			const svg = d3
+				.select("#chart")
+				.append("svg")
+				.attr("width", width + margin.left + margin.right)
+				.attr("height", height + margin.top + margin.bottom)
+				.append("g")
+				.attr("transform", `translate(${margin.left},${margin.top})`);
+
+			const xAxis = d3.axisBottom(x);
+			const yAxis = d3.axisLeft(y);
+
+			svg.append("g").attr("transform", `translate(0,${height})`).call(xAxis);
+			svg.append("g").call(yAxis);
+
+			// add grid lines with gray and dotted line and 50% opacity
+			svg.append("g")
+				.attr("class", "grid")
+				.attr("transform", `translate(0,${height})`)
+				.call(d3.axisBottom(x).tickSize(-height).tickFormat(""))
+				.style("stroke-opacity", 0.1);
+			svg.append("g").attr("class", "grid").call(d3.axisLeft(y).tickSize(-width).tickFormat("")).style("stroke-opacity", 0.1);
+
+			function normalDistribution(x, mean = 0, sd = 1) {
+				return (1 / (sd * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((x - mean) / sd, 2));
+			}
+
+			function distribution(type = "0", x) {
+				if (type === "0") {
+					return normalDistribution(x, (mean = 0), (sd = 1));
+				} else if (type === "1") {
+					return 0.5 * normalDistribution(x, (mean = -2), (sd = 1)) + 0.5 * normalDistribution(x, (mean = 2), (sd = 1));
+				} else if (type === "2") {
+					return uniformPDF(x, -2, 2);
+				}
+			}
+
+			const data = d3.range(-5, 5, 0.01).map((x) => ({ x: x, y: distribution(distribution_type, x) }));
+
+			// rceate function to restart the simulation
+			function restart() {
+				samples.length = 0;
+				x0 = 0;
+				svg.selectAll(".point").remove();
+				svg.selectAll(".bar").remove();
+				// create new svg chart with new data
+				svg.selectAll(".line").remove();
+				let newdata = d3.range(-5, 5, 0.01).map((x) => ({ x: x, y: distribution(distribution_type, x) }));
+				svg.append("path").datum(newdata).attr("class", "line").attr("d", line);
+				updateStats();
+			}
+
+			// Histogram setup
+			const histogram = d3
+				.histogram()
+				.domain(x.domain())
+				.thresholds(x.ticks(30))
+				.value((d) => d.x);
+
+			const yHist = d3.scaleLinear().range([height, 0]);
+
+			const barGroup = svg.append("g");
+
+			const samples = [];
+
+			function updateHistogram() {
+				const bins = histogram(samples);
+				yHist.domain([0, samples.length * 0.5 * yAxisMax]);
+
+				const bars = barGroup.selectAll(".bar").data(bins);
+
+				bars.enter()
+					.append("rect")
+					.attr("class", "bar")
+					.merge(bars)
+					.attr("x", (d) => x(d.x0) + 1)
+					.attr("y", (d) => yHist(d.length))
+					.attr("width", (d) => x(d.x1) - x(d.x0) - 1)
+					.attr("height", (d) => height - yHist(d.length));
+
+				bars.exit().remove();
+			}
+
+			// Append the normal distribution line after the histogram bars so it appears on top
+			svg.append("path").datum(data).attr("class", "line").attr("d", line);
+
+			async function generateSliceSample() {
+				svg.selectAll(".hline").remove();
+
+				let fx0 = distribution(distribution_type, x0);
+				let y0 = Math.random() * fx0;
+
+				let xl = x0;
+				let xr = x0;
+
+				svg.append("line").attr("class", "hline").attr("x1", x(xl)).attr("x2", x(xr)).attr("y1", y(y0)).attr("y2", y(y0));
+
+				const delay = (duration) => new Promise((resolve) => setTimeout(resolve, duration));
+
+				while (distribution(distribution_type, xl) > y0) {
+					xl -= w;
+					svg.selectAll(".hline").attr("x1", x(xl));
+					await delay(delay_value);
+				}
+				while (distribution(distribution_type, xr) > y0) {
+					xr += w;
+					svg.selectAll(".hline").attr("x2", x(xr));
+					await delay(delay_value);
+				}
+
+				let x1;
+				do {
+					x1 = xl + Math.random() * (xr - xl);
+					if (distribution(distribution_type, x1) < y0) {
+						if (x1 < x0) {
+							xl = x1;
+						} else {
+							xr = x1;
+						}
+					}
+					svg.selectAll(".hline").attr("x1", x(xl)).attr("x2", x(xr));
+					svg.append("circle").attr("class", "possible_point").attr("cx", x(x1)).attr("cy", y(y0)).attr("r", 2);
+					await delay(delay_value);
+				} while (distribution(distribution_type, x1) < y0);
+
+				svg.selectAll(".possible_point").remove();
+
+				samples.push({ x: x1, y: y0 });
+				x0 = x1;
+
+				svg.selectAll(".point").remove();
+				svg.selectAll(".point")
+					.data(samples)
+					.enter()
+					.append("circle")
+					.attr("class", "point")
+					.attr("cx", (d) => x(d.x))
+					.attr("cy", (d) => y(d.y))
+					.attr("r", 2);
+
+				updateHistogram();
+				updateStats();
+
+				setTimeout(generateSliceSample, delay_value);
+			}
+
+			generateSliceSample();
+		</script>
+	</body>
+</html>
